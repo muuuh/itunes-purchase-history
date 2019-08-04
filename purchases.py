@@ -1,50 +1,35 @@
-#!/usr/bin/env python
+#mitmdump -r out.flows -n --set flow_detail=0 -s purchases.py
 
-import xml.etree.ElementTree as ET
+from mitmproxy import ctx
+import json
 import csv
-import re
+from datetime import datetime
 
+class iTunesPurchaseExport:
+	def __init__(self):
+		self.purchases = {}
 
-def all_orders(t):
-    NS = 'http://www.apple.com/itms/'
-    ns = {'i': NS}
-    # the form has a name, nice.
-    form = t.find('.//i:VBoxView[@viewName="purchaseHistoryForm"]', ns)
-    # our table is the last matrix
-    matrix = list(form.findall('i:MatrixView', ns))[-1]
-    for row in zip(*[iter(matrix)] * 5):
-        # ignore headers
-        if row[0].tag != '{' + NS + '}GotoURL':
-            continue
-        order_date = row[1].text.strip()
-        order_id = row[2].text.strip()
-        titles = row[3].text.strip()
-        price = row[4].text.strip()
-        # consistent currency format: #,# $ -> $#.#
-        price = re.sub('^(\d+)[.,](\d+)\s*(\D+)$', '\\3\\1.\\2', price).strip()
-        yield (order_date, order_id, titles, price)
+	def response(self, flow):
+		#if "png" not in flow.request.path:
+		#	print(flow.request.path)
+		if 'purchases?' in flow.request.path:
+			decoded = json.loads(flow.response.content.decode(encoding="utf-8"))
+			for day in decoded["data"]["attributes"]["purchases"]:
+				for item in day["items"]:
+					if "Movie Rental" in item["kind"]:
+						print(item["item-name"])
+						list_item = {"item-name" : item["item-name"], "item-id" : item["item-id"], "item-price" : item["price"], "purchase-date" : item["purchase-date"] }
+						#self.purchases.append(list_item)
+						date_object = datetime.strptime(list_item["purchase-date"], "%d %b %Y")
+						self.purchases.update( { int(date_object.strftime('%Y%m%d') + item["item-id"]) : list_item } )
 
+	def done(self):
+		with open("/Users/username/Desktop/itunes_output.csv", 'w') as f:
+			w = csv.writer(f)
+			w.writerow(self.purchases[list(self.purchases.keys())[0]].keys())
+			for list_item in self.purchases:
+				w.writerow(self.purchases[list_item].values())
 
-def start(ctx, argv):
-    if len(argv) != 2:
-        raise ValueError('Usage: -s "' + argv[0] + ' output.csv"')
-    ctx.outname = argv[1]
-    ctx.rows = set()
-
-
-def response(ctx, flow):
-    if 'MZFinance.woa' in flow.request.path:
-        try:
-            # try to parse and extract, ignore on error
-            tree = ET.fromstring(flow.response.get_decoded_content())
-            ctx.rows.update(all_orders(tree))
-        except:
-            pass
-
-
-def done(ctx):
-    with open(ctx.outname, 'w') as f:
-        w = csv.writer(f)
-        w.writerow(['date', 'id', 'titles', 'price'])
-        for row in ctx.rows:
-            w.writerow([r.encode('utf-8') for r in row])
+addons = [
+    iTunesPurchaseExport()
+]
